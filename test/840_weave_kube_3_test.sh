@@ -37,7 +37,7 @@ for host in $HOSTS; do
     fi
 done
 
-[ -n "$COVERAGE" ] && COVERAGE_ARGS="\\n          env:\\n            - name: EXTRA_ARGS\\n              value: \"-test.coverprofile=/home/weave/cover.prof --\""
+[ -n "$COVERAGE" ] && COVERAGE_ARGS="\\n              env:\\n                - name: EXTRA_ARGS\\n                  value: \"-test.coverprofile=/home/weave/cover.prof --\""
 
 sed -e "s%imagePullPolicy: Always%imagePullPolicy: Never$COVERAGE_ARGS%" "$(dirname "$0")/../prog/weave-kube/weave-daemonset-k8s-1.6.yaml" \
 	| run_on $HOST1 "$KUBECTL apply -f -"
