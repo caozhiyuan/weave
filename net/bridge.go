@@ -56,7 +56,10 @@ type Bridge interface {
 
 type bridgeImpl struct{ bridge netlink.Link }
 type fastdpImpl struct{ datapathName string }
-type bridgedFastdpImpl struct{ bridge netlink.Link }
+type bridgedFastdpImpl struct {
+	bridgeImpl
+	fastdpImpl
+}
 
 // Returns a string that is consistent with the weave script
 func (bridgeImpl) String() string        { return "bridge" }
@@ -80,7 +83,7 @@ func DetectBridgeType(weaveBridgeName, datapathName string) (Bridge, error) {
 	case isDatapath(bridge) && datapath == nil:
 		return fastdpImpl{datapathName: datapathName}, nil
 	case isDatapath(datapath) && isBridge(bridge):
-		return bridgedFastdpImpl{bridge: bridge}, nil
+		return bridgedFastdpImpl{bridgeImpl{bridge: bridge}, fastdpImpl{datapathName: datapathName}}, nil
 	default:
 		return nil, errors.New("Inconsistent bridge state detected. Please do 'weave reset' and try again")
 	}
@@ -258,7 +261,7 @@ func CreateBridge(procPath string, config *BridgeConfig) (Bridge, error) {
 	return bridgeType, nil
 }
 
-func initBridgePrep(config *BridgeConfig) error {
+func (b bridgeImpl) initPrep(config *BridgeConfig) error {
 	mac, err := net.ParseMAC(config.Mac)
 	if err != nil {
 		return errors.Wrapf(err, "parsing bridge MAC %q", config.Mac)
@@ -270,11 +273,11 @@ func initBridgePrep(config *BridgeConfig) error {
 	if config.MTU == 0 {
 		config.MTU = 65535
 	}
-	link := &netlink.Bridge{LinkAttrs: linkAttrs}
-	if err = netlink.LinkAdd(link); err != nil {
+	b.bridge = &netlink.Bridge{LinkAttrs: linkAttrs}
+	if err = netlink.LinkAdd(b.bridge); err != nil {
 		return errors.Wrapf(err, "creating bridge %q", config.WeaveBridgeName)
 	}
-	if err := netlink.LinkSetHardwareAddr(link, mac); err != nil {
+	if err := netlink.LinkSetHardwareAddr(b.bridge, mac); err != nil {
 		return errors.Wrapf(err, "setting bridge %q mac %v", config.WeaveBridgeName, mac)
 	}
 	// Attempting to set the bridge MTU to a high value directly
@@ -289,7 +292,7 @@ func initBridgePrep(config *BridgeConfig) error {
 	if err := netlink.LinkSetMTU(dummy, config.MTU); err != nil {
 		return errors.Wrapf(err, "setting dummy interface mtu to %d", config.MTU)
 	}
-	if err := netlink.LinkSetMaster(dummy, link); err != nil {
+	if err := netlink.LinkSetMasterByIndex(dummy, b.bridge.Attrs().Index); err != nil {
 		return errors.Wrap(err, "setting dummy interface master")
 	}
 	if err := netlink.LinkDel(dummy); err != nil {
@@ -299,8 +302,8 @@ func initBridgePrep(config *BridgeConfig) error {
 	return nil
 }
 
-func (bridgeImpl) init(config *BridgeConfig) error {
-	if err := initBridgePrep(config); err != nil {
+func (b bridgeImpl) init(config *BridgeConfig) error {
+	if err := b.initPrep(config); err != nil {
 		return err
 	}
 	if _, err := CreateAndAttachVeth(BridgeIfName, PcapIfName, config.WeaveBridgeName, config.MTU, true, func(veth netlink.Link) error {
@@ -315,11 +318,12 @@ func (bridgeImpl) init(config *BridgeConfig) error {
 	return nil
 }
 
-func initFastdp(config *BridgeConfig) error {
+func (f fastdpImpl) init(config *BridgeConfig) error {
 	datapath, err := netlink.LinkByName(config.DatapathName)
 	if err != nil {
 		return errors.Wrapf(err, "finding datapath %q", config.DatapathName)
 	}
+	f.datapathName = config.DatapathName
 	if config.MTU == 0 {
 		/* GCE has the lowest underlay network MTU we're likely to encounter on
 		   a local network, at 1460 bytes.  To get the overlay MTU from that we
@@ -335,15 +339,11 @@ func initFastdp(config *BridgeConfig) error {
 	return nil
 }
 
-func (fastdpImpl) init(config *BridgeConfig) error {
-	return initFastdp(config)
-}
-
-func (bridgedFastdpImpl) init(config *BridgeConfig) error {
-	if err := initFastdp(config); err != nil {
+func (bf bridgedFastdpImpl) init(config *BridgeConfig) error {
+	if err := bf.fastdpImpl.init(config); err != nil {
 		return err
 	}
-	if err := initBridgePrep(config); err != nil {
+	if err := bf.bridgeImpl.initPrep(config); err != nil {
 		return err
 	}
 	if _, err := CreateAndAttachVeth(BridgeIfName, DatapathIfName, config.WeaveBridgeName, config.MTU, true, func(veth netlink.Link) error {
@@ -369,12 +369,12 @@ func (b bridgeImpl) attach(veth *netlink.Veth) error {
 	return netlink.LinkSetMasterByIndex(veth, b.bridge.Attrs().Index)
 }
 
-func (b bridgedFastdpImpl) attach(veth *netlink.Veth) error {
-	return netlink.LinkSetMasterByIndex(veth, b.bridge.Attrs().Index)
+func (bf bridgedFastdpImpl) attach(veth *netlink.Veth) error {
+	return bf.bridgeImpl.attach(veth)
 }
 
-func (b fastdpImpl) attach(veth *netlink.Veth) error {
-	return odp.AddDatapathInterface(b.datapathName, veth.Attrs().Name)
+func (f fastdpImpl) attach(veth *netlink.Veth) error {
+	return odp.AddDatapathInterface(f.datapathName, veth.Attrs().Name)
 }
 
 func configureIPTables(config *BridgeConfig) error {
