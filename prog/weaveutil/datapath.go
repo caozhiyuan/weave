@@ -31,6 +31,16 @@ func deleteDatapath(args []string) error {
 	return odp.DeleteDatapath(args[0])
 }
 
+func checkDatapath(args []string) error {
+	if len(args) != 0 {
+		cmdUsage("check-datapath", "")
+	}
+	if !odp.DatapathSupported() {
+		os.Exit(17)
+	}
+	return nil
+}
+
 func addDatapathInterface(args []string) error {
 	if len(args) != 2 {
 		cmdUsage("add-datapath-interface", "<datapath> <interface>")

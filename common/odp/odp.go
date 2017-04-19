@@ -89,3 +89,13 @@ func AddDatapathInterface(dpname string, ifname string) error {
 	_, err = dp.CreateVport(odp.NewNetdevVportSpec(ifname))
 	return err
 }
+
+func DatapathSupported() bool {
+	supported := true
+	dpif, err := odp.NewDpif()
+	if err != nil && odp.IsKernelLacksODPError(err) {
+		supported = false
+	}
+	dpif.Close()
+	return supported
+}
